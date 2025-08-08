@@ -9,7 +9,7 @@ const jwt = require("jsonwebtoken");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 
-// Load .env from root
+// Load environment variables from .env file
 dotenv.config({ path: path.resolve(__dirname, "../.env") });
 
 // Validate critical environment variables
@@ -22,14 +22,14 @@ if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
   process.exit(1);
 }
 
-// Debug .env
+// Debug environment variables
 console.log("EMAIL_USER:", process.env.EMAIL_USER || "undefined");
 console.log("PORT:", process.env.PORT || 5000);
 
 const app = express();
 const port = process.env.PORT || 5000;
 
-// MySQL connection (Aiven or local)
+// MySQL connection configuration
 const dbConfig = {
   host: process.env.NODE_ENV === "production" ? process.env.DB_HOST : process.env.DB_HOST_LOCAL,
   port: process.env.NODE_ENV === "production" ? process.env.DB_PORT : process.env.DB_PORT_LOCAL,
@@ -39,7 +39,7 @@ const dbConfig = {
   ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: true } : undefined,
 };
 
-// Nodemailer transporter
+// Nodemailer transporter for email sending
 const transporter = nodemailer.createTransport({
   service: "gmail",
   debug: true,
@@ -50,14 +50,14 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-// Middleware
-app.use(helmet());
+// Middleware setup
+app.use(helmet()); // Security headers
 app.use(cors({
-  origin: ["http://localhost:5173", "https://mamahub.vercel.app"],
-  methods: ["GET", "POST"],
+  origin: ["http://localhost:5173", "http://localhost:5174", "https://mamacare-backend-xu75.onrender.com/"],
+  methods: ["GET", "POST", "OPTIONS"],
   credentials: true,
 }));
-app.use(express.json({ limit: "10kb" }));
+app.use(express.json({ limit: "10kb" })); // Limit request body size
 
 // Rate limiting for critical endpoints
 const limiter = rateLimit({
@@ -67,6 +67,7 @@ const limiter = rateLimit({
 app.use("/api/signup", limiter);
 app.use("/api/login", limiter);
 app.use("/api/verify-email", limiter);
+app.use("/api/contact", limiter);
 
 // Middleware to verify JWT
 const authenticateToken = (req, res, next) => {
@@ -99,7 +100,8 @@ app.get("/api/test-db", async (req, res) => {
   }
 });
 
-// Signup route with email verification
+// User Routes
+// Signup with email verification
 app.post("/api/signup", async (req, res) => {
   const { name, email, password } = req.body;
 
@@ -141,7 +143,7 @@ app.post("/api/signup", async (req, res) => {
         <h3>Welcome to MamaCare, ${name}!</h3>
         <p>Thank you for signing up. Please use the following code to verify your email:</p>
         <h2>${verificationCode}</h2>
-        <p>Enter this code in the MamaCare app at <a href="${process.env.NODE_ENV === "production" ? "https://mamahub.vercel.app/verify" : "http://localhost:5173/verify"}">Verify Email</a> to complete your registration.</p>
+        <p>Enter this code in the MamaCare app at <a href="${process.env.NODE_ENV === "production" ? "https://mamacare.vercel.app/verify" : "http://localhost:5174/verify"}">Verify Email</a> to complete your registration.</p>
         <p>If you didn’t sign up, please ignore this email.</p>
       `,
     };
@@ -166,7 +168,7 @@ app.post("/api/signup", async (req, res) => {
   }
 });
 
-// Verify email route with auto-login
+// Verify email with auto-login
 app.post("/api/verify-email", async (req, res) => {
   const { email, code } = req.body;
 
@@ -208,7 +210,7 @@ app.post("/api/verify-email", async (req, res) => {
           <li>Expense Tracker: Monitor baby-related expenses.</li>
           <li>Milestones: Record your baby’s special moments.</li>
         </ul>
-        <p>You're logged in and ready to start! Visit <a href="${process.env.NODE_ENV === "production" ? "https://mamahub.vercel.app/dashboard" : "http://localhost:5173/dashboard"}">MamaCare Dashboard</a>.</p>
+        <p>You're logged in and ready to start! Visit <a href="${process.env.NODE_ENV === "production" ? "https://mamacare.vercel.app/dashboard" : "http://localhost:5174/dashboard"}">MamaCare Dashboard</a>.</p>
         <p>Thank you for joining us!</p>
         <p>The MamaCare Team</p>
       `,
@@ -234,7 +236,7 @@ app.post("/api/verify-email", async (req, res) => {
   }
 });
 
-// Login route
+// Login
 app.post("/api/login", async (req, res) => {
   const { email, password } = req.body;
 
@@ -281,7 +283,7 @@ app.post("/api/login", async (req, res) => {
   }
 });
 
-// Contact route
+// Contact form
 app.post("/api/contact", limiter, async (req, res) => {
   const { name, email, message } = req.body;
 
@@ -304,25 +306,44 @@ app.post("/api/contact", limiter, async (req, res) => {
     replyTo: email,
     subject: `MamaCare Contact Form - From ${name}`,
     html: `
-      <h3>New Contact Message</h3>
+      <h3>New Contact Message from MamaCare</h3>
       <p><strong>Name:</strong> ${name}</p>
       <p><strong>Email:</strong> ${email}</p>
       <p><strong>Message:</strong></p>
       <p>${message}</p>
+      <p>Reply to this message directly or contact the user at <a href="mailto:${email}">${email}</a>.</p>
+      <p>Thank you for supporting MamaCare!</p>
     `,
   };
 
   try {
     const info = await transporter.sendMail(mailOptions);
-    console.log("Email sent:", info.response);
+    console.log("Contact email sent:", info.response);
     res.status(200).json({ message: "Email sent successfully!" });
   } catch (error) {
-    console.error("Email sending failed:", error.message);
+    console.error("Contact email sending failed:", error.message);
     res.status(500).json({ message: "Failed to send email", error: error.message });
   }
 });
 
-// Add baby profile
+// User Data
+app.get("/api/user", authenticateToken, async (req, res) => {
+  try {
+    const db = await mysql.createConnection(dbConfig);
+    const [users] = await db.execute("SELECT id, name, email FROM users WHERE id = ?", [req.user.userId]);
+    if (users.length === 0) {
+      await db.end();
+      return res.status(404).json({ message: "User not found" });
+    }
+    await db.end();
+    res.status(200).json(users[0]);
+  } catch (error) {
+    console.error("Get user error:", error.message);
+    res.status(500).json({ message: "Failed to fetch user data", error: error.message });
+  }
+});
+
+// Baby Profiles
 app.post("/api/babies", authenticateToken, async (req, res) => {
   const { name, birth_date, gender } = req.body;
   if (!name || !birth_date || !gender) {
@@ -347,7 +368,6 @@ app.post("/api/babies", authenticateToken, async (req, res) => {
   }
 });
 
-// Get baby profiles
 app.get("/api/babies", authenticateToken, async (req, res) => {
   try {
     const db = await mysql.createConnection(dbConfig);
@@ -360,7 +380,7 @@ app.get("/api/babies", authenticateToken, async (req, res) => {
   }
 });
 
-// Add schedule
+// Schedules
 app.post("/api/schedules", authenticateToken, async (req, res) => {
   const { baby_id, type, scheduled_time, notes } = req.body;
   if (!baby_id || !type || !scheduled_time) {
@@ -381,7 +401,6 @@ app.post("/api/schedules", authenticateToken, async (req, res) => {
   }
 });
 
-// Get schedules
 app.get("/api/schedules", authenticateToken, async (req, res) => {
   try {
     const db = await mysql.createConnection(dbConfig);
@@ -397,7 +416,7 @@ app.get("/api/schedules", authenticateToken, async (req, res) => {
   }
 });
 
-// Add expense
+// Expenses
 app.post("/api/expenses", authenticateToken, async (req, res) => {
   const { baby_id, category, amount, description, expense_date } = req.body;
   if (!category || !amount || !expense_date) {
@@ -418,7 +437,6 @@ app.post("/api/expenses", authenticateToken, async (req, res) => {
   }
 });
 
-// Get expenses
 app.get("/api/expenses", authenticateToken, async (req, res) => {
   try {
     const db = await mysql.createConnection(dbConfig);
@@ -434,7 +452,7 @@ app.get("/api/expenses", authenticateToken, async (req, res) => {
   }
 });
 
-// Add milestone
+// Milestones
 app.post("/api/milestones", authenticateToken, async (req, res) => {
   const { baby_id, title, description, milestone_date, photo_url } = req.body;
   if (!baby_id || !title || !milestone_date) {
@@ -455,7 +473,6 @@ app.post("/api/milestones", authenticateToken, async (req, res) => {
   }
 });
 
-// Get milestones
 app.get("/api/milestones", authenticateToken, async (req, res) => {
   try {
     const db = await mysql.createConnection(dbConfig);
@@ -471,7 +488,7 @@ app.get("/api/milestones", authenticateToken, async (req, res) => {
   }
 });
 
-// Add daily read
+// Daily Reads
 app.post("/api/daily_reads", authenticateToken, async (req, res) => {
   const { title, content, published_date } = req.body;
   if (!title || !content || !published_date) {
@@ -492,7 +509,6 @@ app.post("/api/daily_reads", authenticateToken, async (req, res) => {
   }
 });
 
-// Get daily reads
 app.get("/api/daily_reads", authenticateToken, async (req, res) => {
   try {
     const db = await mysql.createConnection(dbConfig);
@@ -505,7 +521,7 @@ app.get("/api/daily_reads", authenticateToken, async (req, res) => {
   }
 });
 
-// Add scripture
+// Scriptures
 app.post("/api/scriptures", authenticateToken, async (req, res) => {
   const { verse, reference } = req.body;
   if (!verse || !reference) {
@@ -526,7 +542,6 @@ app.post("/api/scriptures", authenticateToken, async (req, res) => {
   }
 });
 
-// Get scriptures
 app.get("/api/scriptures", authenticateToken, async (req, res) => {
   try {
     const db = await mysql.createConnection(dbConfig);
@@ -539,20 +554,182 @@ app.get("/api/scriptures", authenticateToken, async (req, res) => {
   }
 });
 
-// Get user data
-app.get("/api/user", authenticateToken, async (req, res) => {
+// New Feature Routes
+// BMI Calculator
+app.get("/api/bmi", authenticateToken, async (req, res) => {
   try {
-    const db = await mysql.createConnection(dbConfig);
-    const [users] = await db.execute("SELECT id, name, email FROM users WHERE id = ?", [req.user.userId]);
-    if (users.length === 0) {
-      await db.end();
-      return res.status(404).json({ message: "User not found" });
-    }
-    await db.end();
-    res.status(200).json(users[0]);
+    res.status(200).json({ message: "BMI Calculator endpoint coming soon" });
   } catch (error) {
-    console.error("Get user error:", error.message);
-    res.status(500).json({ message: "Failed to fetch user data", error: error.message });
+    console.error("Get BMI error:", error.message);
+    res.status(500).json({ message: "Failed to fetch BMI data", error: error.message });
+  }
+});
+
+app.post("/api/bmi", authenticateToken, async (req, res) => {
+  const { weight, height } = req.body;
+  if (!weight || !height) {
+    return res.status(400).json({ message: "Missing required fields: weight, height" });
+  }
+  if (typeof weight !== "number" || typeof height !== "number" || weight <= 0 || height <= 0) {
+    return res.status(400).json({ message: "Invalid input: weight and height must be positive numbers" });
+  }
+
+  try {
+    res.status(200).json({ message: "BMI Calculator POST endpoint coming soon" });
+  } catch (error) {
+    console.error("Post BMI error:", error.message);
+    res.status(500).json({ message: "Failed to calculate BMI", error: error.message });
+  }
+});
+
+// Baby Measurements
+app.get("/api/baby-measurements", authenticateToken, async (req, res) => {
+  try {
+    res.status(200).json({ message: "Baby Measurements endpoint coming soon" });
+  } catch (error) {
+    console.error("Get baby measurements error:", error.message);
+    res.status(500).json({ message: "Failed to fetch baby measurements", error: error.message });
+  }
+});
+
+app.post("/api/baby-measurements", authenticateToken, async (req, res) => {
+  const { baby_id, height, weight, measurement_date } = req.body;
+  if (!baby_id || !height || !weight || !measurement_date) {
+    return res.status(400).json({ message: "Missing required fields: baby_id, height, weight, measurement_date" });
+  }
+  if (typeof height !== "number" || typeof weight !== "number" || height <= 0 || weight <= 0) {
+    return res.status(400).json({ message: "Invalid input: height and weight must be positive numbers" });
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(measurement_date)) {
+    return res.status(400).json({ message: "Invalid input: measurement_date must be in YYYY-MM-DD format" });
+  }
+
+  try {
+    res.status(201).json({ message: "Baby Measurements POST endpoint coming soon" });
+  } catch (error) {
+    console.error("Post baby measurements error:", error.message);
+    res.status(500).json({ message: "Failed to add baby measurement", error: error.message });
+  }
+});
+
+// Birthday Reminder
+app.get("/api/birthday-reminder", authenticateToken, async (req, res) => {
+  try {
+    res.status(200).json({ message: "Birthday Reminder endpoint coming soon" });
+  } catch (error) {
+    console.error("Get birthday reminder error:", error.message);
+    res.status(500).json({ message: "Failed to fetch birthday reminders", error: error.message });
+  }
+});
+
+app.post("/api/birthday-reminder", authenticateToken, async (req, res) => {
+  const { baby_id, reminder_date } = req.body;
+  if (!baby_id || !reminder_date) {
+    return res.status(400).json({ message: "Missing required fields: baby_id, reminder_date" });
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(reminder_date)) {
+    return res.status(400).json({ message: "Invalid input: reminder_date must be in YYYY-MM-DD format" });
+  }
+
+  try {
+    res.status(201).json({ message: "Birthday Reminder POST endpoint coming soon" });
+  } catch (error) {
+    console.error("Post birthday reminder error:", error.message);
+    res.status(500).json({ message: "Failed to add birthday reminder", error: error.message });
+  }
+});
+
+// Pediatrician Finder
+app.get("/api/pediatrician-finder", authenticateToken, async (req, res) => {
+  try {
+    res.status(200).json({ message: "Pediatrician Finder endpoint coming soon" });
+  } catch (error) {
+    console.error("Get pediatrician finder error:", error.message);
+    res.status(500).json({ message: "Failed to fetch pediatrician data", error: error.message });
+  }
+});
+
+// Accessories
+app.get("/api/accessories", authenticateToken, async (req, res) => {
+  try {
+    res.status(200).json({ message: "Accessories endpoint coming soon" });
+  } catch (error) {
+    console.error("Get accessories error:", error.message);
+    res.status(500).json({ message: "Failed to fetch accessories", error: error.message });
+  }
+});
+
+app.post("/api/accessories", authenticateToken, async (req, res) => {
+  const { name, type, price, description } = req.body;
+  if (!name || !type || !price) {
+    return res.status(400).json({ message: "Missing required fields: name, type, price" });
+  }
+  if (typeof price !== "number" || price < 0) {
+    return res.status(400).json({ message: "Invalid input: price must be a non-negative number" });
+  }
+  if (!["toy", "clothing", "maternal"].includes(type.toLowerCase())) {
+    return res.status(400).json({ message: "Invalid input: type must be toy, clothing, or maternal" });
+  }
+
+  try {
+    res.status(201).json({ message: "Accessories POST endpoint coming soon" });
+  } catch (error) {
+    console.error("Post accessories error:", error.message);
+    res.status(500).json({ message: "Failed to add accessory", error: error.message });
+  }
+});
+
+// Neonatal Jaundice Checker
+app.get("/api/jaundice-checker", authenticateToken, async (req, res) => {
+  try {
+    res.status(200).json({ message: "Neonatal Jaundice Checker endpoint coming soon" });
+  } catch (error) {
+    console.error("Get jaundice checker error:", error.message);
+    res.status(500).json({ message: "Failed to fetch jaundice checker data", error: error.message });
+  }
+});
+
+app.post("/api/jaundice-checker", authenticateToken, async (req, res) => {
+  const { baby_id, symptoms } = req.body;
+  if (!baby_id || !symptoms) {
+    return res.status(400).json({ message: "Missing required fields: baby_id, symptoms" });
+  }
+  if (!Array.isArray(symptoms)) {
+    return res.status(400).json({ message: "Invalid input: symptoms must be an array" });
+  }
+
+  try {
+    res.status(201).json({ message: "Neonatal Jaundice Checker POST endpoint coming soon" });
+  } catch (error) {
+    console.error("Post jaundice checker error:", error.message);
+    res.status(500).json({ message: "Failed to process jaundice checker", error: error.message });
+  }
+});
+
+// Skin Disease Detector
+app.get("/api/skin-disease-detector", authenticateToken, async (req, res) => {
+  try {
+    res.status(200).json({ message: "Skin Disease Detector endpoint coming soon" });
+  } catch (error) {
+    console.error("Get skin disease detector error:", error.message);
+    res.status(500).json({ message: "Failed to fetch skin disease detector data", error: error.message });
+  }
+});
+
+app.post("/api/skin-disease-detector", authenticateToken, async (req, res) => {
+  const { baby_id, symptoms } = req.body;
+  if (!baby_id || !symptoms) {
+    return res.status(400).json({ message: "Missing required fields: baby_id, symptoms" });
+  }
+  if (!Array.isArray(symptoms)) {
+    return res.status(400).json({ message: "Invalid input: symptoms must be an array" });
+  }
+
+  try {
+    res.status(201).json({ message: "Skin Disease Detector POST endpoint coming soon" });
+  } catch {
+    console.error("Post skin disease detector error:", error.message);
+    res.status(500).json({ message: "Failed to process skin disease detector", error: error.message });
   }
 });
 
@@ -561,6 +738,7 @@ app.use((req, res) => {
   res.status(404).json({ message: "Endpoint not found" });
 });
 
+// Start server
 app.listen(port, () => {
   console.log(`API server running on http://localhost:${port}`);
 });
